@@ -40,6 +40,11 @@
           "icon": "appIcons/browseweb.png",
           "shell": "surf https://lite.duckduckgo.com/lite/"
         },
+        {
+          "name": "C64",
+          "icon": "appIcons/c64.png",
+          "shell": "x64 +VICIIdsize -VICIIfilter 0 -fullscreen -VICIIvsync -sounddev alsa -soundarg plughw:CARD=sun4icodec,DEV=0 -soundrate 22050 -residsamp 1 -soundoutput 1"
+        },
       ],
       "cornerButtons": [
         {
