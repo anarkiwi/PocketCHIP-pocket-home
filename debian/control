@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Ben Young <computermouth@proton.me>
 Build-Depends: debhelper-compat (= 13),
  libx11-dev, libxext-dev, libxinerama-dev, libxrandr-dev, libxcursor-dev,
- libfreetype6-dev, libasound2-dev, libi2c-dev, pkg-config
+ libfreetype6-dev, libasound2-dev, libi2c-dev, libglib2.0-dev, pkg-config
 Standards-Version: 4.7.0
 Homepage: https://github.com/nextthingco/PocketCHIP-pocket-home
 
@@ -13,5 +13,5 @@ Architecture: armhf
 Depends: ${shlibs:Depends}, ${misc:Depends}, network-manager, x-terminal-emulator
 Description: pocket-home is a home screen for PocketCHIP.
  pocket-home is a home screen for PocketCHIP. It can launch programs and change
- system settings. Wifi status is read via nmcli; wifi configuration is handled by
- nmtui launched in a terminal (no libnm-glib dependency).
+ system settings. Wifi status follows NetworkManager's D-Bus signals; wifi
+ configuration is handled by nmtui launched in a terminal.

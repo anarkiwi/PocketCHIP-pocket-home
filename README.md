@@ -11,8 +11,12 @@ sudo apt-get install \
     libxcursor-dev \
     libxft-dev \
     libxinerama-dev \
-    libnm-glib-dev \
-    network-manager-dev \
+    libglib2.0-dev \
     libi2c-dev \
     libasound2-dev 
 ```
+
+### Tests
+
+`tests/run.sh` builds natively in Docker and runs the integration tests against a mock
+NetworkManager D-Bus service.

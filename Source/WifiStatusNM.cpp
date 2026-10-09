@@ -1,5 +1,8 @@
 #ifdef LINUX
 
+#include <gio/gio.h>
+#include <memory>
+
 #include "WifiStatus.h"
 #include "../JuceLibraryCode/JuceHeader.h"
 
@@ -43,11 +46,192 @@ StringArray splitTerse(const String& line, int leadingFields) {
   return out;
 }
 
+const char *const nmName = "org.freedesktop.NetworkManager";
+const char *const nmPath = "/org/freedesktop/NetworkManager";
+const char *const nmDevice = "org.freedesktop.NetworkManager.Device";
+const char *const nmWireless = "org.freedesktop.NetworkManager.Device.Wireless";
+const char *const nmAccessPoint = "org.freedesktop.NetworkManager.AccessPoint";
+const guint32 deviceTypeWifi = 2;
+const guint32 deviceStateActivated = 100;
+
+using Variant = std::unique_ptr<GVariant, decltype(&g_variant_unref)>;
+
+Variant
+getProperty(GDBusConnection *bus, const String &path, const char *iface, const char *name) {
+  GVariant *value = nullptr;
+  GVariant *reply = g_dbus_connection_call_sync(bus,
+                                                nmName,
+                                                path.toRawUTF8(),
+                                                "org.freedesktop.DBus.Properties",
+                                                "Get",
+                                                g_variant_new("(ss)", iface, name),
+                                                G_VARIANT_TYPE("(v)"),
+                                                G_DBUS_CALL_FLAGS_NO_AUTO_START,
+                                                2000,
+                                                nullptr,
+                                                nullptr);
+  if (reply) {
+    g_variant_get(reply, "(v)", &value);
+    g_variant_unref(reply);
+  }
+  return Variant(value, g_variant_unref);
+}
+
+struct NMMonitor {
+  WifiStatusNM *owner;
+  GDBusConnection *bus;
+  String device, accessPoint;
+
+  void refresh() {
+    WifiStatusNM::State state;
+    device = accessPoint = String::empty;
+    Variant enabled = getProperty(bus, nmPath, nmName, "WirelessEnabled");
+    state.enabled = enabled && g_variant_get_boolean(enabled.get());
+    Variant devices = getProperty(bus, nmPath, nmName, "Devices");
+    for (gsize i = 0; devices && i < g_variant_n_children(devices.get()); ++i) {
+      Variant path(g_variant_get_child_value(devices.get(), i), g_variant_unref);
+      const String p = g_variant_get_string(path.get(), nullptr);
+      Variant type = getProperty(bus, p, nmDevice, "DeviceType");
+      if (type && g_variant_get_uint32(type.get()) == deviceTypeWifi) {
+        device = p;
+        break;
+      }
+    }
+    if (device.isNotEmpty()) {
+      Variant devState = getProperty(bus, device, nmDevice, "State");
+      Variant ap = getProperty(bus, device, nmWireless, "ActiveAccessPoint");
+      if (devState && g_variant_get_uint32(devState.get()) == deviceStateActivated && ap)
+        accessPoint = g_variant_get_string(ap.get(), nullptr);
+    }
+    if (accessPoint.isNotEmpty() && accessPoint != "/") {
+      Variant ssid = getProperty(bus, accessPoint, nmAccessPoint, "Ssid");
+      Variant strength = getProperty(bus, accessPoint, nmAccessPoint, "Strength");
+      gsize len = 0;
+      const char *raw =
+          ssid ? (const char *)g_variant_get_fixed_array(ssid.get(), &len, 1) : nullptr;
+      state.connected = true;
+      state.ssid = String::fromUTF8(raw, (int)len);
+      state.signalStrength = strength ? g_variant_get_byte(strength.get()) : 0;
+    }
+    owner->setPending(state);
+  }
+
+  bool relevant(const String &path, const gchar *member, GVariant *params) const {
+    if (path != nmPath && path != device && path != accessPoint) return false;
+    if (strcmp(member, "PropertiesChanged") != 0)
+      return strcmp(member, "StateChanged") == 0 || strcmp(member, "DeviceAdded") == 0 ||
+             strcmp(member, "DeviceRemoved") == 0;
+    if (!g_variant_is_of_type(params, G_VARIANT_TYPE("(sa{sv}as)"))) return false;
+    Variant changed(g_variant_get_child_value(params, 1), g_variant_unref);
+    for (auto key :
+         { "WirelessEnabled", "Devices", "State", "ActiveAccessPoint", "Ssid", "Strength" })
+      if (Variant(g_variant_lookup_value(changed.get(), key, nullptr), g_variant_unref))
+        return true;
+    return false;
+  }
+};
+
+void
+onSignal(GDBusConnection *,
+         const gchar *,
+         const gchar *path,
+         const gchar *,
+         const gchar *member,
+         GVariant *params,
+         gpointer data) {
+  auto monitor = static_cast<NMMonitor *>(data);
+  if (monitor->relevant(path, member, params)) monitor->refresh();
+}
+
+void
+onNameOwner(GDBusConnection *, const gchar *, const gchar *, gpointer data) {
+  static_cast<NMMonitor *>(data)->refresh();
+}
+
+void
+onNameLost(GDBusConnection *, const gchar *, gpointer data) {
+  auto monitor = static_cast<NMMonitor *>(data);
+  monitor->device = monitor->accessPoint = String::empty;
+  monitor->owner->setPending(WifiStatusNM::State());
+}
+
 } // namespace
 
-WifiStatusNM::WifiStatusNM() : listeners() {}
+WifiStatusNM::WifiStatusNM()
+: Thread("WifiStatusNM"), context(g_main_context_new()), loop(g_main_loop_new(context, FALSE)) {}
 
-WifiStatusNM::~WifiStatusNM() { stopTimer(); }
+WifiStatusNM::~WifiStatusNM() {
+  if (isThreadRunning()) {
+    GSource *quit = g_idle_source_new();
+    g_source_set_callback(
+        quit,
+        [](gpointer l) {
+          g_main_loop_quit(static_cast<GMainLoop *>(l));
+          return G_SOURCE_REMOVE;
+        },
+        loop,
+        nullptr);
+    g_source_attach(quit, context);
+    g_source_unref(quit);
+    stopThread(-1);
+  }
+  g_main_loop_unref(loop);
+  g_main_context_unref(context);
+}
+
+void
+WifiStatusNM::run() {
+  g_main_context_push_thread_default(context);
+  GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, nullptr, nullptr);
+  if (bus) {
+    NMMonitor monitor{ this, bus };
+    const guint sub = g_dbus_connection_signal_subscribe(bus,
+                                                         nmName,
+                                                         nullptr,
+                                                         nullptr,
+                                                         nullptr,
+                                                         nullptr,
+                                                         G_DBUS_SIGNAL_FLAGS_NONE,
+                                                         onSignal,
+                                                         &monitor,
+                                                         nullptr);
+    const guint watch = g_bus_watch_name_on_connection(
+        bus, nmName, G_BUS_NAME_WATCHER_FLAGS_NONE, onNameOwner, onNameLost, &monitor, nullptr);
+    g_main_loop_run(loop);
+    g_bus_unwatch_name(watch);
+    g_dbus_connection_signal_unsubscribe(bus, sub);
+    g_object_unref(bus);
+  } else {
+    setPending(State());
+  }
+  g_main_context_pop_thread_default(context);
+}
+
+void
+WifiStatusNM::setPending(const State &state) {
+  {
+    const ScopedLock lock(pendingLock);
+    pending = state;
+  }
+  triggerAsyncUpdate();
+  ready.signal();
+}
+
+void
+WifiStatusNM::handleAsyncUpdate() {
+  const State prev = current;
+  {
+    const ScopedLock lock(pendingLock);
+    current = pending;
+  }
+  if (current.enabled != prev.enabled)
+    for (auto l : listeners) current.enabled ? l->handleWifiEnabled() : l->handleWifiDisabled();
+  if (current.connected != prev.connected)
+    for (auto l : listeners)
+      current.connected ? l->handleWifiConnected() : l->handleWifiDisconnected();
+  else if (current.ssid != prev.ssid || current.signalStrength != prev.signalStrength)
+    for (auto l : listeners) l->handleWifiSignalChanged();
+}
 
 OwnedArray<WifiAccessPoint> WifiStatusNM::nearbyAccessPoints() {
   OwnedArray<WifiAccessPoint> aps;
@@ -74,13 +258,19 @@ OwnedArray<WifiAccessPoint> WifiStatusNM::nearbyAccessPoints() {
 }
 
 ScopedPointer<WifiAccessPoint> WifiStatusNM::connectedAccessPoint() const {
-  if (connectedAP == nullptr)
-    return nullptr;
-  return ScopedPointer<WifiAccessPoint>{ new WifiAccessPoint(*connectedAP) };
+  if (!current.connected) return nullptr;
+  return ScopedPointer<WifiAccessPoint>{ new WifiAccessPoint{
+      current.ssid, current.signalStrength, false, current.ssid } };
 }
 
-bool WifiStatusNM::isEnabled() const { return enabled; }
-bool WifiStatusNM::isConnected() const { return connected; }
+bool
+WifiStatusNM::isEnabled() const {
+  return current.enabled;
+}
+bool
+WifiStatusNM::isConnected() const {
+  return current.connected;
+}
 
 void WifiStatusNM::addListener(Listener* listener) { listeners.add(listener); }
 void WifiStatusNM::clearListeners() { listeners.clear(); }
@@ -97,46 +287,12 @@ void WifiStatusNM::setDisconnected() {
   launchDetached("x-terminal-emulator -e nmtui");
 }
 
-void WifiStatusNM::poll() {
-  const bool wasEnabled = enabled;
-  const bool wasConnected = connected;
-
-  enabled = runCapture("nmcli -t radio wifi").trim() == "enabled";
-
-  // ACTIVE,SIGNAL then SSID last; the active row (ACTIVE == "yes") is the
-  // network we're on -- that drives the launcher wifi icon.
-  connected = false;
-  connectedAP = nullptr;
-  const String out = runCapture("nmcli -t -f ACTIVE,SIGNAL,SSID device wifi");
-  const StringArray lines = StringArray::fromLines(out);
-  for (int i = 0; i < lines.size(); ++i) {
-    if (lines[i].isEmpty()) continue;
-    const StringArray f = splitTerse(lines[i], 2);     // ACTIVE, SIGNAL, SSID
-    if (f[0].trim() == "yes") {
-      connected = true;
-      WifiAccessPoint* ap = new WifiAccessPoint();
-      ap->ssid = f[2].trim();
-      ap->signalStrength = f[1].getIntValue();
-      ap->requiresAuth = false;
-      ap->hash = ap->ssid;
-      connectedAP = ap;
-      break;
-    }
-  }
-
-  if (enabled != wasEnabled)
-    for (int i = 0; i < listeners.size(); ++i)
-      enabled ? listeners[i]->handleWifiEnabled() : listeners[i]->handleWifiDisabled();
-  if (connected != wasConnected)
-    for (int i = 0; i < listeners.size(); ++i)
-      connected ? listeners[i]->handleWifiConnected() : listeners[i]->handleWifiDisconnected();
-}
-
-void WifiStatusNM::timerCallback() { poll(); }
-
 void WifiStatusNM::initializeStatus() {
-  poll();
-  startTimer(3000);   // refresh the icon every few seconds
+  startThread();
+  if (ready.wait(2000)) {
+    cancelPendingUpdate();
+    handleAsyncUpdate();
+  }
 }
 
 #endif // LINUX

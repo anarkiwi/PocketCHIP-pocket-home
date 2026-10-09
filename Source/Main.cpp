@@ -3,6 +3,10 @@
 #include "WifiStatus.h"
 #include "Utils.h"
 
+#include <errno.h>
+#include <signal.h>
+#include <sys/wait.h>
+
 // FIXME: this is a hack to fix touch screen presses causing buzzing
 // when no application holds alsa open
 #if JUCE_LINUX
@@ -23,6 +27,14 @@ void BluetoothStatus::populateFromJson(const var &json) {
     device->paired = btDevice["paired"];
     devices.add(device);
   }
+}
+
+static void
+reapChildren(int) {
+  const int savedErrno = errno;
+  while (waitpid(-1, nullptr, WNOHANG) > 0) {
+  }
+  errno = savedErrno;
 }
 
 PageStackComponent &getMainStack() {
@@ -158,6 +170,12 @@ void PokeLaunchApplication::initialise(const String &commandLine) {
     std::cerr << "  --fakewifi:	Use fake WifiStatus" << std::endl;
     quit();
   }
+
+  struct sigaction reaper = {};
+  reaper.sa_handler = reapChildren;
+  reaper.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+  sigemptyset(&reaper.sa_mask);
+  sigaction(SIGCHLD, &reaper, nullptr);
 
   auto configFile = assetFile("config.json");
   if (!configFile.exists()) {

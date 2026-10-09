@@ -6,18 +6,19 @@
 #include "WifiStatus.h"
 #include "../JuceLibraryCode/JuceHeader.h"
 
+typedef struct _GMainContext GMainContext;
+typedef struct _GMainLoop GMainLoop;
+
 /*
- * nmcli/nmtui-backed wifi status.
- *
- * The original implementation linked libnm-glib, which was removed from Debian
- * (trixie). Rather than port to the modern libnm C API, this keeps Network
- * Manager integration to the minimum pocket-home actually needs: read-only
- * status via `nmcli` (drives the launcher wifi icon, polled on a timer), while
- * all configuration -- enabling the radio, scanning, entering PSKs, connecting
- * -- is delegated to `nmtui` launched in a terminal. The class name is kept so
- * Main.h's LINUX toggle and the Projucer Makefile object list are unchanged.
+ * NetworkManager-backed wifi status. Radio, connection and signal state come
+ * from NetworkManager's D-Bus signals, handled on a GDBus thread and delivered
+ * to listeners on the message thread. Configuration (radio toggle, scanning,
+ * PSKs, connecting) is delegated to nmcli/nmtui on user action.
  */
-class WifiStatusNM : public WifiStatus, private Timer {
+class WifiStatusNM
+: public WifiStatus
+, private Thread
+, private AsyncUpdater {
 public:
   WifiStatusNM();
   ~WifiStatusNM() override;
@@ -37,14 +38,25 @@ public:
 
   void initializeStatus() override;
 
-private:
-  void timerCallback() override;   // poll nmcli, notify listeners on change
-  void poll();                     // refresh enabled/connected/connectedAP
+  struct State {
+    bool enabled = false;
+    bool connected = false;
+    String ssid;
+    int signalStrength = 0;
+  };
 
-  Array<Listener*> listeners;
-  ScopedPointer<WifiAccessPoint> connectedAP = nullptr;
-  bool enabled = false;
-  bool connected = false;
+  void setPending(const State &state);
+
+private:
+  void run() override;
+  void handleAsyncUpdate() override;
+
+  Array<Listener *> listeners;
+  CriticalSection pendingLock;
+  State pending, current;
+  GMainContext *context;
+  GMainLoop *loop;
+  WaitableEvent ready;
 };
 
 #endif // LINUX

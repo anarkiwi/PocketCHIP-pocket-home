@@ -2,10 +2,9 @@ export CONFIG:=Release
 
 PKG_CONFIG:=$(shell which pkg-config)
 
-# NetworkManager/libnm-glib dropped: wifi status now goes through nmcli and
-# config through nmtui (see Source/WifiStatusNM.cpp), so we no longer link NM.
 PKG_CONFIG_PACKAGES = \
 	alsa \
+	gio-2.0 \
 
 export PKG_CONFIG_CFLAGS=$(foreach pkg, $(PKG_CONFIG_PACKAGES), $(shell $(PKG_CONFIG) --cflags $(pkg)))
 # -li2c: the i2c_smbus_* helpers moved out of <linux/i2c-dev.h> into libi2c

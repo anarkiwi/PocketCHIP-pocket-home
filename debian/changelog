@@ -1,3 +1,12 @@
+pocket-home (0.0.9) trixie; urgency=low
+
+  * Track wifi state from NetworkManager D-Bus signals (GDBus) instead of
+    polling nmcli; the launcher wifi icon updates from listener callbacks.
+  * Reap launched child processes with a SIGCHLD handler.
+  * Get Help opens old.reddit.com; add a Browse Web launcher entry.
+
+ -- Josh Bailey <josh@vandervecken.com>  Fri, 09 Oct 2026 04:44:12 +0000
+
 pocket-home (0.0.8) trixie; urgency=low
 
   * Port to build on Debian trixie. WifiStatusNM rewritten from libnm-glib

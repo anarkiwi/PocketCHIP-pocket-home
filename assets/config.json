@@ -23,7 +23,7 @@
          {
           "name": "Get Help",
           "icon": "appIcons/help.png",
-          "shell": "surf https://www.reddit.com/r/ChipCommunity/"
+          "shell": "surf https://old.reddit.com/r/ChipCommunity/"
         },
         {
           "name": "Write",
@@ -34,6 +34,11 @@
           "name": "Browse Files",
           "icon": "appIcons/filebrowser.png",
           "shell": "pcmanfm"
+        },
+        {
+          "name": "Browse Web",
+          "icon": "appIcons/browseweb.png",
+          "shell": "surf https://lite.duckduckgo.com/lite/"
         },
       ],
       "cornerButtons": [

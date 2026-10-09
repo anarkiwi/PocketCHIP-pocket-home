@@ -2,9 +2,10 @@
 
 #include "../JuceLibraryCode/JuceHeader.h"
 
+#include "BatteryMonitor.h"
 #include "LauncherBarComponent.h"
 #include "PageStackComponent.h"
-#include "BatteryMonitor.h"
+#include "WifiStatus.h"
 
 class LauncherComponent;
 class AppsPageComponent;
@@ -16,10 +17,25 @@ public:
     LauncherComponent* launcherComponent;
 };
 
-class WifiIconTimer : public Timer {
+class WifiIconListener : public WifiStatus::Listener {
 public:
-  WifiIconTimer() {};
-  void timerCallback();
+  WifiIconListener(){};
+  void update();
+  void handleWifiEnabled() override {
+    update();
+  }
+  void handleWifiDisabled() override {
+    update();
+  }
+  void handleWifiConnected() override {
+    update();
+  }
+  void handleWifiDisconnected() override {
+    update();
+  }
+  void handleWifiSignalChanged() override {
+    update();
+  }
   LauncherComponent* launcherComponent;
 };
 
@@ -34,7 +50,7 @@ public:
     Array<Image> wifiIconImages;
 
     BatteryIconTimer batteryIconTimer;
-    WifiIconTimer wifiIconTimer;
+    WifiIconListener wifiIconListener;
     Component* defaultPage;
   
     // FIXME: we have no need for the pages/pagesByName if we're using scoped pointers for each page.

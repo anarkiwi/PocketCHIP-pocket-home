@@ -40,7 +40,8 @@ void BatteryIconTimer::timerCallback() {
               batteryImg = batteryIconsCharging[status];
 
           }
-          
+          if (button->getNormalImage() == batteryImg) continue;
+
           button->setImages(false, true, true,
                        batteryImg, 1.0f, Colours::transparentWhite, // normal
                        batteryImg, 1.0f, Colours::transparentWhite, // over
@@ -55,7 +56,8 @@ void BatteryIconTimer::timerCallback() {
   
 }
 
-void WifiIconTimer::timerCallback() {
+void
+WifiIconListener::update() {
   if(!launcherComponent) { return; }
     
   for( auto button : launcherComponent->topButtons->buttons ) {
@@ -187,10 +189,10 @@ LauncherComponent::LauncherComponent(const var &configJson)
   batteryIconTimer.launcherComponent = this;
   batteryIconTimer.startTimer(1000);
   batteryIconTimer.timerCallback();
-  
-  wifiIconTimer.launcherComponent = this;
-  wifiIconTimer.startTimer(2000);
-  wifiIconTimer.timerCallback();
+
+  wifiIconListener.launcherComponent = this;
+  getWifiStatus().addListener(&wifiIconListener);
+  wifiIconListener.update();
 }
 
 LauncherComponent::~LauncherComponent() {

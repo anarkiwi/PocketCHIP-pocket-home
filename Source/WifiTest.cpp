@@ -47,6 +47,37 @@ void WifiTestListener::handleWifiFailedConnect() {
     std::cerr << "FAILED! not expecting to connection failure" << std::endl;
 }
 
+class WifiMonitorListener : public WifiStatus::Listener {
+public:
+  WifiMonitorListener(WifiStatus &status) : status(status) {}
+
+  void print(const char *event) {
+    auto ap = status.connectedAccessPoint();
+    std::cout << event << " enabled=" << status.isEnabled() << " connected=" << status.isConnected()
+              << " ssid=" << (ap ? ap->ssid : String::empty)
+              << " strength=" << (ap ? ap->signalStrength : 0) << std::endl;
+  }
+
+  void handleWifiEnabled() override {
+    print("enabled");
+  }
+  void handleWifiDisabled() override {
+    print("disabled");
+  }
+  void handleWifiConnected() override {
+    print("connected");
+  }
+  void handleWifiDisconnected() override {
+    print("disconnected");
+  }
+  void handleWifiSignalChanged() override {
+    print("signal");
+  }
+
+private:
+  WifiStatus &status;
+};
+
 class WifiTestApplication;
 
 class WifiNextStepTimer : public Timer {
@@ -87,6 +118,7 @@ private:
   Array< std::function<void(WifiStatus *wifiStatus)> > testSteps;
   WifiNextStepTimer testStepTimer;
   OwnedArray<WifiTestListener> listeners;
+  ScopedPointer<WifiMonitorListener> monitor;
 };
 
 void WifiNextStepTimer::timerCallback() {
@@ -127,6 +159,7 @@ void WifiTestApplication::initialise(const String &commandLine) {
     std::cerr << "  --fakewifi:  Use fake WifiStatus" << std::endl;
     std::cerr << "  --ssid <SSID>" << std::endl;
     std::cerr << "  --psk <PSK>" << std::endl;
+    std::cerr << "  --monitor <SECONDS>: print status changes, then quit" << std::endl;
     quit();
   }
 
@@ -139,6 +172,16 @@ void WifiTestApplication::initialise(const String &commandLine) {
     ssid = args[args.indexOf("--ssid")+1].unquoted();
   if (args.contains("--psk"))
     psk = args[args.indexOf("--psk")+1].unquoted();
+
+  if (args.contains("--monitor")) {
+    monitor = new WifiMonitorListener(*wifiStatus);
+    wifiStatus->initializeStatus();
+    monitor->print("initial");
+    wifiStatus->addListener(monitor);
+    testStepTimer.wifiTestApp = this;
+    testStepTimer.startTimer(args[args.indexOf("--monitor") + 1].getIntValue() * 1000);
+    return;
+  }
 
   std::cout << "Using SSID = " << ssid << std::endl;
   std::cout << "Using PSK = " << psk << std::endl;
